@@ -1,0 +1,30 @@
+[Unit]
+Description=Minitel Text Sender Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/minitel-sender
+ExecStart=/home/pi/minitel-sender/minitel -f text.txt -d 1000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Sécurité
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Limites de ressources
+MemoryMax=50M
+CPUQuota=50%
+
+# Gestion des signaux
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
