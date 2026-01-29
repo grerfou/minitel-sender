@@ -314,10 +314,11 @@ make start-service
 
 ##  Licence
 
+GNU GENERAL PUBLIC LICENSE
 
 ##  Auteur
 
-**Creative Coding 2026**
+**grerfou**
 
 ##  Remerciements
 
