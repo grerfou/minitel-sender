@@ -35,9 +35,9 @@
 /* Configuration */
 #define SERIAL_PORT     "/dev/ttyUSB0"
 #define BAUDRATE        B4800
-#define CHARS_PER_LINE  80
-#define LINES_SKIP      70
-#define DEFAULT_DELAY   40000
+#define CHARS_PER_LINE  10
+#define LINES_SKIP      30
+#define DEFAULT_DELAY   1000
 #define LOG_FILE        "/tmp/minitel.log"
 #define MAX_RETRIES     5
 #define RETRY_DELAY     5
@@ -206,27 +206,50 @@ int init_minitel_screen(int fd) {
  */
 int send_file_to_minitel(int fd, const char *filename, int delay) {
     FILE *file;
-    char c;
+    int c;  // IMPORTANT: int, pas char, pour détecter EOF
     int count = 0;
     int bytes_sent = 0;
     char msg[256];
     
+    printf("[DEBUG] send_file_to_minitel: début, fd=%d, filename=%s\n", fd, filename);
+    
     if (fd < 0 || !check_serial_connection(fd)) {
+        printf("[DEBUG] Port série non connecté !\n");
         log_message("ERROR", "Port série non connecté");
         return -1;
     }
     
+    printf("[DEBUG] Ouverture fichier %s...\n", filename);
     file = fopen(filename, "r");
     if (file == NULL) {
+        printf("[DEBUG] ERREUR fopen: %s\n", strerror(errno));
         snprintf(msg, sizeof(msg), "Erreur ouverture %s: %s", filename, strerror(errno));
         log_message("ERROR", msg);
         return -1;
     }
     
+    // Debug: vérifier la taille du fichier
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    printf("[DEBUG] Taille fichier: %ld octets\n", file_size);
+    snprintf(msg, sizeof(msg), "Lecture de %s (%ld octets)", filename, file_size);
+    log_message("INFO", msg);
+    
+    if (file_size == 0) {
+        printf("[DEBUG] Fichier vide !\n");
+        log_message("WARN", "Fichier vide !");
+        fclose(file);
+        return 0;  // Pas une erreur, juste vide
+    }
+    
     // Lire et envoyer
+    printf("[DEBUG] Début lecture caractères...\n");
     while (keep_running && (c = fgetc(file)) != EOF) {
         // Vérifier connexion tous les 100 caractères
         if (bytes_sent % 100 == 0 && !check_serial_connection(fd)) {
+            printf("[DEBUG] Connexion perdue à %d octets\n", bytes_sent);
             log_message("ERROR", "Connexion perdue pendant l'envoi");
             fclose(file);
             return -1;
@@ -239,6 +262,7 @@ int send_file_to_minitel(int fd, const char *filename, int delay) {
         
         // Envoyer le caractère
         if (write(fd, &c, 1) < 0) {
+            printf("[DEBUG] Erreur write à %d octets: %s\n", bytes_sent, strerror(errno));
             log_message("ERROR", "Erreur écriture caractère");
             fclose(file);
             return -1;
@@ -250,6 +274,7 @@ int send_file_to_minitel(int fd, const char *filename, int delay) {
         // Retour à la ligne
         if (count >= CHARS_PER_LINE) {
             if (write(fd, "\r\n", 2) < 0) {
+                printf("[DEBUG] Erreur write \\r\\n: %s\n", strerror(errno));
                 log_message("ERROR", "Erreur retour ligne");
                 fclose(file);
                 return -1;
@@ -260,24 +285,39 @@ int send_file_to_minitel(int fd, const char *filename, int delay) {
         usleep(delay);
     }
     
+    printf("[DEBUG] Fin lecture. keep_running=%d, bytes_sent=%d\n", keep_running, bytes_sent);
+    
     fclose(file);
     
+    printf("[DEBUG] Fichier fermé\n");
+    
     // Retour chariot avant de sauter les lignes
+    printf("[DEBUG] Envoi retour chariot...\n");
     if (write(fd, "\r", 1) < 0) {
+        printf("[DEBUG] Erreur retour chariot: %s\n", strerror(errno));
         log_message("ERROR", "Erreur retour chariot");
         return -1;
     }
     
     // Sauter 30 lignes
+    printf("[DEBUG] Saut de %d lignes...\n", LINES_SKIP);
     for (int i = 0; i < LINES_SKIP && keep_running; i++) {
         if (write(fd, "\n", 1) < 0) {
+            printf("[DEBUG] Erreur saut ligne %d: %s\n", i, strerror(errno));
             log_message("ERROR", "Erreur saut lignes");
             return -1;
         }
     }
     
+    printf("[DEBUG] send_file_to_minitel: succès, %d octets envoyés\n", bytes_sent);
     snprintf(msg, sizeof(msg), "Fichier envoyé: %d octets", bytes_sent);
     log_message("INFO", msg);
+    
+    // Debug
+    if (bytes_sent == 0) {
+        printf("[DEBUG] ATTENTION: Aucun octet envoyé !\n");
+        log_message("WARN", "Aucun octet envoyé ! Fichier vide ou que des retours ligne ?");
+    }
     
     return 0;
 }
@@ -361,6 +401,7 @@ int main(int argc, char *argv[]) {
         }
         
         // Boucle d'envoi
+        printf("\n[DEBUG] === Boucle d'envoi, keep_running=%d, reconnect_needed=%d ===\n", keep_running, reconnect_needed);
         while (keep_running && !reconnect_needed) {
             // Watchdog
             time_t now = time(NULL);
@@ -369,21 +410,29 @@ int main(int argc, char *argv[]) {
                 last_watchdog = now;
             }
             
+            printf("[DEBUG] Appel send_file_to_minitel...\n");
             // Envoyer le fichier
             if (send_file_to_minitel(fd_global, filename, delay) < 0) {
+                printf("[DEBUG] send_file_to_minitel a retourné -1 (ERREUR)\n");
                 log_message("ERROR", "Erreur envoi, reconnexion...");
                 reconnect_needed = 1;
                 break;
             }
             
+            printf("[DEBUG] send_file_to_minitel a retourné 0 (SUCCESS)\n");
+            
             if (one_shot) {
+                printf("[DEBUG] Mode one-shot activé, arrêt\n");
                 log_message("INFO", "Mode one-shot, arrêt");
                 keep_running = 0;
                 break;
             }
             
+            printf("[DEBUG] Attente 1 seconde avant reboucle...\n");
             sleep(1);
         }
+        
+        printf("[DEBUG] Sortie boucle d'envoi: keep_running=%d, reconnect_needed=%d\n", keep_running, reconnect_needed);
         
         // Fermer proprement
         if (fd_global >= 0) {
